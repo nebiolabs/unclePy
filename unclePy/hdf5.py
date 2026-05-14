@@ -1,7 +1,6 @@
 import h5py
 import numpy as np
 import pandas as pd
-import re
 from datetime import datetime
 import sqlalchemy
 import yaml
@@ -53,6 +52,12 @@ class HDF5:
 
     exp_plate_side()
         Returns side of plate used in experiment (L/R)
+
+    exp_product_from_db()
+        Returns product name from database
+
+    exp_name_from_db()
+        Returns experiment set name constructed from database fields
 
     wells(include_uni_address)
         Returns names of wells used in experiment
@@ -183,6 +188,11 @@ class HDF5:
         -------
         str
             Name of experiment - same as file name without plate side
+
+        Notes
+        -----
+        Superseded by exp_name_from_db() for experiment set naming, which
+        derives the name from database fields rather than the filename.
         """
         return self.exp_file_name()[:-1]
 
@@ -293,6 +303,58 @@ class HDF5:
         assert plate_side.lower() in ['l', 'r'],\
             'Incorrect plate side. Plate side should be one of: L, R'
         return plate_side
+
+    def exp_product_from_db(self):
+        """
+        Returns
+        -------
+        str
+            Product name from database
+        """
+        with self.engine.connect() as con:
+            query = sqlalchemy.text(
+                "SELECT p.name "
+                "FROM products p "
+                "JOIN uncle_experiment_sets ues "
+                "   ON ues.product_id = p.id "
+                "WHERE ues.id = {}".format(
+                    self.exp_set_id
+                ))
+            result = con.execute(query)
+            result = result.mappings().all()
+
+        return result[0]['name']
+
+    def exp_name_from_db(self):
+        """
+        Returns
+        -------
+        str
+            Name of experiment set constructed from database fields:
+            YYMMDD-ProductName-PlateTypeGeneration
+            (e.g. 260410-FCE-Njord_(R-207)-pH005)
+        """
+        with self.engine.connect() as con:
+            query = sqlalchemy.text(
+                "SELECT created_at "
+                "FROM uncle_experiment_sets "
+                "WHERE id = {}".format(
+                    self.exp_set_id
+                ))
+            result = con.execute(query)
+            result = result.mappings().all()
+
+        date = pd.Timestamp(result[0]['created_at']).strftime('%y%m%d')
+        product = self.exp_product_from_db()
+        plate_type = self.exp_plate_type()
+        generation = '{:03d}'.format(self.exp_generation())
+
+        # Some plate type names already embed the generation (e.g. 'ADD003'),
+        # while others don't (e.g. 'pH'). Only append if not already present.
+        plate_info = plate_type if plate_type.endswith(generation) \
+            else plate_type + generation
+
+        return '{}-{}-{}'.format(date, product, plate_info)
 
     # ----------------------------------------------------------------------- #
     # EXPERIMENT INFORMATION                                                  #
